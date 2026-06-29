@@ -1,65 +1,167 @@
-import Image from "next/image";
+'use client'
+
+import { useState, useCallback, useEffect } from 'react'
+import { PhotoUpload } from '@/components/photo-upload'
+import { AnalysisResults } from '@/components/analysis-results'
+import { HistoryPanel } from '@/components/history-panel'
+import { ProgressChart } from '@/components/progress-chart'
+import { DetailView } from '@/components/detail-view'
+import { AuthForm } from '@/components/auth-form'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { analyzeFace, type AnalysisResult } from '@/lib/facial-analysis'
+import { analyzeSkin, type SkinAnalysisResult } from '@/lib/skin-analysis'
+import { saveAnalysis } from '@/lib/db'
+import { getSession, signOut, onAuthStateChange } from '@/lib/auth'
+import { Scan, History, TrendingUp, LogOut } from 'lucide-react'
+import type { Session } from '@supabase/supabase-js'
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+  const [session, setSession] = useState<Session | null>(null)
+  const [authLoading, setAuthLoading] = useState(true)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [facialResult, setFacialResult] = useState<AnalysisResult | null>(null)
+  const [skinResult, setSkinResult] = useState<SkinAnalysisResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
+  const [selectedAnalysis, setSelectedAnalysis] = useState<string | null>(null)
+
+  useEffect(() => {
+    getSession().then((s) => {
+      setSession(s)
+      setAuthLoading(false)
+    })
+
+    const { data: { subscription } } = onAuthStateChange((s) => {
+      setSession(s as Session | null)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const handleImageReady = useCallback(async (imageEl: HTMLImageElement, dataUrl: string) => {
+    setIsAnalyzing(true)
+    setError(null)
+    setFacialResult(null)
+    setSkinResult(null)
+
+    try {
+      const facial = await analyzeFace(imageEl)
+      setFacialResult(facial)
+
+      const skin = analyzeSkin(imageEl, facial.landmarks)
+      setSkinResult(skin)
+
+      await saveAnalysis(dataUrl, facial, skin)
+      setRefreshTrigger((prev) => prev + 1)
+    } catch (err) {
+      console.error('Analysis error:', err)
+      setError(err instanceof Error ? err.message : 'Error durante el análisis')
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }, [])
+
+  const handleSignOut = async () => {
+    await signOut()
+    setSession(null)
+    setFacialResult(null)
+    setSkinResult(null)
+    setSelectedAnalysis(null)
+  }
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (!session) {
+    return <AuthForm onSuccess={() => getSession().then(setSession)} />
+  }
+
+  if (selectedAnalysis) {
+    return (
+      <main className="min-h-screen bg-background">
+        <header className="border-b">
+          <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+            <div>
+              <h1 className="text-2xl font-bold">FaceMetrics</h1>
+              <p className="text-sm text-muted-foreground">Análisis Facial con Inteligencia Artificial</p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-muted-foreground hidden sm:inline">{session.user.email}</span>
+              <Button variant="ghost" size="icon" onClick={handleSignOut}>
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        </header>
+        <div className="container mx-auto px-4 py-6">
+          <DetailView analysisId={selectedAnalysis} onBack={() => setSelectedAnalysis(null)} />
         </div>
       </main>
-    </div>
-  );
+    )
+  }
+
+  return (
+    <main className="min-h-screen bg-background">
+      <header className="border-b">
+        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-bold">FaceMetrics</h1>
+            <p className="text-sm text-muted-foreground">Análisis Facial con Inteligencia Artificial</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground hidden sm:inline">{session.user.email}</span>
+            <Button variant="ghost" size="icon" onClick={handleSignOut}>
+              <LogOut className="w-4 h-4" />
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="container mx-auto px-4 py-6">
+        <Tabs defaultValue="analyze" className="space-y-6">
+          <TabsList className="grid w-full max-w-md mx-auto grid-cols-3">
+            <TabsTrigger value="analyze"><Scan className="w-4 h-4 mr-1" /> Analizar</TabsTrigger>
+            <TabsTrigger value="history"><History className="w-4 h-4 mr-1" /> Historial</TabsTrigger>
+            <TabsTrigger value="progress"><TrendingUp className="w-4 h-4 mr-1" /> Progreso</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="analyze" className="space-y-6">
+            <div className="max-w-2xl mx-auto">
+              <PhotoUpload onImageReady={handleImageReady} isAnalyzing={isAnalyzing} />
+            </div>
+
+            {error && (
+              <div className="max-w-2xl mx-auto p-4 bg-destructive/10 text-destructive rounded-lg text-center">
+                {error}
+              </div>
+            )}
+
+            {facialResult && skinResult && (
+              <div className="max-w-4xl mx-auto">
+                <AnalysisResults facial={facialResult} skin={skinResult} />
+              </div>
+            )}
+          </TabsContent>
+
+          <TabsContent value="history">
+            <div className="max-w-2xl mx-auto">
+              <HistoryPanel onSelect={setSelectedAnalysis} refreshTrigger={refreshTrigger} />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="progress">
+            <div className="max-w-4xl mx-auto">
+              <ProgressChart refreshTrigger={refreshTrigger} />
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
+    </main>
+  )
 }
